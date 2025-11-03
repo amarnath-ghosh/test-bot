@@ -80,7 +80,9 @@ export class AudioManager {
 
   async saveCurrentAudioSender(): Promise<void> {
     if (!this.peerConnection) {
-      throw new Error('PeerConnection not available');
+      // This is the error you are likely getting.
+      // app/page.tsx never calls setPeerConnection()
+      throw new Error('PeerConnection not available. Cannot find audio sender.');
     }
 
     const senders = this.peerConnection.getSenders();

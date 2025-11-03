@@ -9,11 +9,18 @@
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "declaration": true,
-    "outDir": "dist/electron",
-    "rootDir": "electron",
+    "outDir": "../dist/electron",
+    "rootDir": "../",
     "types": ["node"]
   },
-  "include": ["electron/**/*"],
-  "exclude": ["node_modules", "dist", "out"]
+  "include": [
+    "./**/*.ts",
+    "../lib/types.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "../dist",
+    "../out",
+    "../lib/types.d.ts"
+  ]
 }

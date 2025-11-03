@@ -38,13 +38,14 @@ class ElectronApp {
       show: false
     });
 
-    // Load the app - THIS IS THE FIX
+    // Load the app
     if (isDev) {
       this.windows.mainWindow.loadURL('http://localhost:3000');
       this.windows.mainWindow.webContents.openDevTools();
     } else {
-      // Fixed path for production
-      this.windows.mainWindow.loadFile(path.join(__dirname, '../../out/index.html'));
+      // MODIFIED PATH: from ../../out to ../../../out
+      this.windows.mainWindow.loadFile(path.join(__dirname, '../../../out/index.html'));
+      this.windows.mainWindow.webContents.openDevTools();
     }
 
     this.windows.mainWindow.once('ready-to-show', () => {
@@ -67,7 +68,7 @@ class ElectronApp {
           webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
-            preload: path.join(__dirname, 'preload.js'),
+            preload: path.join(__dirname, 'preload.js'), // This path is still correct
             webSecurity: true,
             allowRunningInsecureContent: false
           },

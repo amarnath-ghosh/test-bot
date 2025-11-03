@@ -17,6 +17,7 @@ export interface TranscriptSegment {
   endTime: number;
   confidence: number;
   words?: WordSegment[];
+  isFinal?: boolean; // Added this property
 }
 
 export interface WordSegment {
@@ -72,9 +73,10 @@ export interface DeepgramResponse {
   speech_final: boolean;
 }
 
+// Replaced the old BotResponse with one for chat
 export interface BotResponse {
+  speaker: 'Bot' | 'User';
   text: string;
-  confidence: number;
   timestamp: number;
 }
 
@@ -101,10 +103,3 @@ export interface AppState {
   status: string;
   error: string | null;
 }
-
-// Remove this entire section:
-// declare global {
-//   interface Window {
-//     electronAPI?: ElectronAPI;
-//   }
-// }
