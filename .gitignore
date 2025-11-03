@@ -41,6 +41,10 @@ yarn-error.log*
 next-env.d.ts
 
 
+# Ignore build and binary files
 dist/
 *.exe
-*.asar
+*.dll
+*.blockmap
+*.yml
+*.pak
