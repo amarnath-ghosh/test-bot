@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, desktopCapturer, DesktopCapturerSource, IpcMainInvokeEvent, session } from 'electron';
 import * as path from 'path';
-import * as fs from 'fs'; // <-- Import File System module
+import * as fs from 'fs';
 import { WindowManager } from './types';
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -218,7 +218,8 @@ class ElectronApp {
         'zoom.us',
         'teams.microsoft.com',
         'webex.com',
-        'gotomeeting.com'
+        'gotomeeting.com',
+        'bigbluebutton.org' 
       ];
       
       return validDomains.some(domain => urlObj.hostname.includes(domain));
