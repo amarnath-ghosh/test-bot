@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TranscriptionService } from '@/lib/transcription';
 import { SpeechService } from '@/lib/speech';
-import { AudioManager } from '@/lib/audioManager';
 import { AnalyticsService } from '@/lib/analytics';
 import { GeminiService } from '@/lib/aiService'; 
 import {
@@ -12,6 +11,7 @@ import {
   AudioCaptureSettings,
   DeepgramResponse,
   BotResponse,
+  DesktopCapturerSource, // <-- MODIFIED: Import our own interface
 } from '@/lib/types';
 
 const DEFAULT_AUDIO_SETTINGS: AudioCaptureSettings = {
@@ -39,16 +39,13 @@ export default function MeetingBotApp() {
   // Service instances
   const transcriptionServiceRef = useRef<TranscriptionService | null>(null);
   const speechServiceRef = useRef<SpeechService | null>(null);
-  const audioManagerRef = useRef<AudioManager | null>(null);
   const analyticsServiceRef = useRef<AnalyticsService | null>(null);
   const geminiServiceRef = useRef<GeminiService | null>(null);
 
   // Media references
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  // --- [FIX 2] This ref will keep the main stream alive ---
   const desktopStreamRef = useRef<MediaStream | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
-  const userMicStreamRef = useRef<MediaStream | null>(null);
 
   // Initialize services
   useEffect(() => {
@@ -60,12 +57,11 @@ export default function MeetingBotApp() {
           pitch: 1.0,
           volume: 0.8,
         });
-        audioManagerRef.current = new AudioManager(); 
 
-        setAppState(prev => ({ ...prev, status: 'Services initialized' }));
+        setAppState((prev: AppState) => ({ ...prev, status: 'Services initialized' }));
       } catch (error) {
         console.error('Failed to initialize services:', error);
-        setAppState(prev => ({
+        setAppState((prev: AppState) => ({
           ...prev,
           error: (error as Error).message,
           status: 'Initialization failed',
@@ -88,13 +84,9 @@ export default function MeetingBotApp() {
     if (speechServiceRef.current) {
       speechServiceRef.current.stop();
     }
-    if (audioManagerRef.current) {
-      audioManagerRef.current.cleanup();
-    }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
-    // --- [FIX 2] Add desktopStreamRef to cleanup ---
     if (desktopStreamRef.current) {
       desktopStreamRef.current.getTracks().forEach(track => track.stop());
       desktopStreamRef.current = null;
@@ -103,25 +95,21 @@ export default function MeetingBotApp() {
       audioStreamRef.current.getTracks().forEach(track => track.stop());
       audioStreamRef.current = null;
     }
-    if (userMicStreamRef.current) {
-      userMicStreamRef.current.getTracks().forEach(track => track.stop());
-      userMicStreamRef.current = null;
-    }
   }, []);
 
   const handleJoinMeeting = async (): Promise<void> => {
     if (!appState.meetingUrl.trim()) {
-      setAppState(prev => ({ ...prev, error: 'Please enter a valid meeting URL' }));
+      setAppState((prev: AppState) => ({ ...prev, error: 'Please enter a valid meeting URL' }));
       return;
     }
 
     try {
-      setAppState(prev => ({ ...prev, status: 'Joining meeting...', error: null }));
+      setAppState((prev: AppState) => ({ ...prev, status: 'Joining meeting...', error: null }));
 
       if (window.electronAPI) {
         const result = await window.electronAPI.joinMeeting(appState.meetingUrl);
         if (result.success) {
-          setAppState(prev => ({
+          setAppState((prev: AppState) => ({
             ...prev,
             isInMeeting: true,
             status: 'Joined meeting. Click "Start Analysis" to begin recording and analysis.',
@@ -136,7 +124,7 @@ export default function MeetingBotApp() {
       } else {
         // Fallback: open in new browser tab
         window.open(appState.meetingUrl, '_blank', 'width=1024,height=768');
-        setAppState(prev => ({
+        setAppState((prev: AppState) => ({
           ...prev,
           isInMeeting: true,
           status: 'Meeting opened in new tab. Click "Start Analysis" when ready.',
@@ -148,7 +136,7 @@ export default function MeetingBotApp() {
       }
     } catch (error) {
       console.error('Error joining meeting:', error);
-      setAppState(prev => ({
+      setAppState((prev: AppState) => ({
         ...prev,
         error: (error as Error).message,
         status: 'Join failed',
@@ -158,7 +146,7 @@ export default function MeetingBotApp() {
 
   const handleStartAnalysis = async (): Promise<void> => {
     try {
-      setAppState(prev => ({ ...prev, status: 'Initializing...', error: null }));
+      setAppState((prev: AppState) => ({ ...prev, status: 'Initializing...', error: null }));
 
       // Check if Deepgram is configured
       const apiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
@@ -174,7 +162,7 @@ export default function MeetingBotApp() {
         console.log('✓ Connected to Deepgram');
       } else {
         console.warn('⚠ No Deepgram API key configured. Running in mock mode.');
-        setAppState(prev => ({
+        setAppState((prev: AppState) => ({
           ...prev,
           status:
             'Running in demo mode (no real transcription). Add Deepgram API key for real-time transcription.',
@@ -195,7 +183,7 @@ export default function MeetingBotApp() {
       
       setSessionStartTime(Date.now());
 
-      setAppState(prev => ({
+      setAppState((prev: AppState) => ({
         ...prev,
         isRecording: true,
         status: apiKey
@@ -205,7 +193,7 @@ export default function MeetingBotApp() {
     } catch (error) {
       console.error('Error starting analysis:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      setAppState(prev => ({
+      setAppState((prev: AppState) => ({
         ...prev,
         error: `Failed to start analysis: ${errorMessage}`,
         status: 'Analysis failed to start',
@@ -221,10 +209,11 @@ export default function MeetingBotApp() {
       if (window.electronAPI) {
         // --- ELECTRON-SPECIFIC AUDIO CAPTURE ---
         console.log('Electron API found. Using desktopCapturer.');
-        setAppState(prev => ({ ...prev, status: 'Getting audio sources...' }));
+        setAppState((prev: AppState) => ({ ...prev, status: 'Getting audio sources...' }));
 
         const sources = await window.electronAPI.getSources();
-        const entireScreenSource = sources.find(source => source.id.startsWith('screen:'));
+        // MODIFIED: Added explicit type for 'source'
+        const entireScreenSource = sources.find((source: DesktopCapturerSource) => source.id.startsWith('screen:'));
         
         if (!entireScreenSource) {
           throw new Error("Could not find a screen to capture.");
@@ -248,21 +237,19 @@ export default function MeetingBotApp() {
         };
         // @ts-ignore
         const fullDesktopStream = await navigator.mediaDevices.getUserMedia(constraints);
-        // --- [FIX 2] Save the full stream to the ref to keep it alive ---
         desktopStreamRef.current = fullDesktopStream;
         transcriptionAudioStream = new MediaStream(fullDesktopStream.getAudioTracks());
         
       } else {
         // --- BROWSER-BASED FALLBACK (getDisplayMedia) ---
         console.log('No Electron API found. Falling back to getDisplayMedia.');
-        setAppState(prev => ({ ...prev, status: 'Requesting permission. IMPORTANT: Please check "Share tab audio" or "Share system audio" to capture all participants.' }));
+        setAppState((prev: AppState) => ({ ...prev, status: 'Requesting permission. IMPORTANT: Please check "Share tab audio" or "Share system audio" to capture all participants.' }));
         
         const displayStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
           audio: true,
         });
 
-        // --- [FIX 2] Save the full stream to the ref to keep it alive ---
         desktopStreamRef.current = displayStream;
 
         const hasAudio = displayStream.getAudioTracks().length > 0;
@@ -274,26 +261,6 @@ export default function MeetingBotApp() {
       
       audioStreamRef.current = transcriptionAudioStream;
       console.log('✓ Audio stream obtained for transcription.');
-
-      // --- Get User's Microphone (for speaking and bot-swap) ---
-      try {
-        const micStream = await navigator.mediaDevices.getUserMedia({ 
-          audio: DEFAULT_AUDIO_SETTINGS 
-        });
-        userMicStreamRef.current = micStream;
-        console.log('✓ Capturing user microphone for speaking.');
-        
-        if (audioManagerRef.current) {
-            audioManagerRef.current.initializeOriginalTrack(DEFAULT_AUDIO_SETTINGS);
-            console.log("AudioManager initialized with user's mic track.");
-        }
-
-      } catch (micError) {
-         console.error('Could not get microphone:', micError);
-         throw new Error(
-            'Microphone permission is required for the bot to speak.'
-         );
-      }
       
       // --- Start MediaRecorder ---
       const supportedTypes = [
@@ -331,7 +298,7 @@ export default function MeetingBotApp() {
 
       mediaRecorder.onerror = (event: Event) => {
         console.error('MediaRecorder error:', event);
-        setAppState(prev => ({
+        setAppState((prev: AppState) => ({
           ...prev,
           error: 'Recording error occurred. Please try again.',
           status: 'Recording failed'
@@ -340,7 +307,7 @@ export default function MeetingBotApp() {
 
       mediaRecorder.onstart = () => {
         console.log('✓ MediaRecorder started successfully');
-        setAppState(prev => ({ 
+        setAppState((prev: AppState) => ({ 
           ...prev, 
           status: 'Recording and analyzing meeting audio...' 
         }));
@@ -353,7 +320,7 @@ export default function MeetingBotApp() {
             console.warn("MediaRecorder stopped unexpectedly. Restarting capture...");
             startAudioCapture().catch(err => {
                 console.error("Failed to restart audio capture:", err);
-                setAppState(prev => ({...prev, error: "Audio capture failed and could not be restarted."}));
+                setAppState((prev: AppState) => ({...prev, error: "Audio capture failed and could not be restarted."}));
             });
         }
       };
@@ -414,7 +381,7 @@ export default function MeetingBotApp() {
         );
       }
 
-      setTranscript(prev => {
+      setTranscript((prev: TranscriptSegment[]) => {
         const existingIndex = prev.findIndex(
           s => s.speakerIndex === segment.speakerIndex && !s.isFinal
         );
@@ -448,7 +415,7 @@ export default function MeetingBotApp() {
 
   const handleTranscriptionError = useCallback((error: Error): void => {
     console.error('Transcription error:', error);
-    setAppState(prev => ({
+    setAppState((prev: AppState) => ({
       ...prev,
       error: `Transcription error: ${error.message}`,
       status: 'Transcription failed',
@@ -457,7 +424,6 @@ export default function MeetingBotApp() {
 
   const checkForBotMention = (segment: TranscriptSegment): void => {
     const text = segment.text.toLowerCase();
-    // Added your log's mis-transcriptions to the trigger list
     const botTriggers = ['bot', 'assistant', 'ai', 'hey bot', 'bot please', 'hello board', 'hello bob'];
     
     if (botTriggers.some(trigger => text.includes(trigger))) {
@@ -471,11 +437,11 @@ export default function MeetingBotApp() {
       return;
     }
     
+    // Feedback loop checks (these are good, keep them)
     if (segment.text.toLowerCase().includes("i'm sorry, i encountered an error")) {
         console.warn("Detected audio feedback loop. Ignoring.");
         return;
     }
-    // [FIX 3] Ignore the feedback loop from the tone
     if (segment.text.toLowerCase().includes("gemini") || segment.text.toLowerCase().includes("flash")) {
         console.warn("Detected audio feedback loop of Gemini error. Ignoring.");
         return;
@@ -486,18 +452,20 @@ export default function MeetingBotApp() {
       const question = segment.text;
       
       let currentTranscript: TranscriptSegment[] = [];
-      setTranscript(prev => {
+      setTranscript((prev: TranscriptSegment[]) => {
         currentTranscript = prev;
         return prev;
       });
 
+      // Show "thinking" message
       const thinkingMessage: BotResponse = {
         speaker: 'Bot',
         text: '...',
         timestamp: Date.now(),
       };
-      setBotResponses(prev => [...prev, thinkingMessage]);
+      setBotResponses((prev: BotResponse[]) => [...prev, thinkingMessage]);
 
+      // 1. Get text response from Gemini
       const responseText = await geminiServiceRef.current.generateResponse(
         question,
         currentTranscript
@@ -508,8 +476,9 @@ export default function MeetingBotApp() {
         text: responseText,
         timestamp: Date.now(),
       };
-
-      setBotResponses(prev => {
+      
+      // Update UI with final text
+      setBotResponses((prev: BotResponse[]) => {
         const updated = [...prev];
         const lastResponse = updated[updated.length - 1];
         if (lastResponse && lastResponse.text === '...') {
@@ -520,33 +489,29 @@ export default function MeetingBotApp() {
         return updated;
       });
 
-      // --- Bot speaking logic ---
-      if (speechServiceRef.current && audioManagerRef.current) {
+      // --- NEW: Bot speaking logic ---
+      if (speechServiceRef.current && window.electronAPI) {
         try {
-            console.log("Generating bot audio track...");
-            const botAudioTrack = await speechServiceRef.current.createAudioTrack(responseText);
-            console.log("Bot audio track (tone) created.", botAudioTrack);
+            console.log("Generating bot audio data from text...");
+            // 2. Get audio data from TTS service
+            const audioData = await speechServiceRef.current.createAudioData(responseText);
+            console.log("Bot audio data created (ArrayBuffer).");
             
-            // --- [FIX 3] Commented out to prevent audio feedback loop ---
-            // console.warn("Playing bot's audio (tone) locally for testing.");
-            // const audio = new Audio();
-            // audio.srcObject = new MediaStream([botAudioTrack]);
-            // audio.play();
-
-            // The real hot-swap logic is still pending a real PeerConnection
-            console.warn("Bot audio streaming to meeting is NOT IMPLEMENTED.");
-            // await audioManagerRef.current.saveCurrentAudioSender();
-            // await audioManagerRef.current.replaceWithSynthetic(botAudioTrack);
-            // botAudioTrack.onended = () => audioManagerRef.current.restoreOriginalTrack();
+            // 3. Send audio data to main process to be relayed to meeting window
+            window.electronAPI.sendBotAudio(audioData);
+            console.log("Sent bot audio data to main process.");
 
         } catch(audioError) {
-             console.error("Failed to stream bot audio:", audioError);
+             console.error("Failed to generate or send bot audio:", audioError);
         }
+      } else {
+        console.warn("Speech service or Electron API not available. Cannot speak.");
       }
+      // --- END of NEW logic ---
 
     } catch (error) {
-      console.error('Error generating bot response:', error);
-      setBotResponses(prev => {
+      console.error('Error in handleBotResponse:', error);
+      setBotResponses((prev: BotResponse[]) => {
         const updated = [...prev];
         const lastResponse = updated[updated.length - 1];
         if (lastResponse && lastResponse.text === '...') {
@@ -562,7 +527,6 @@ export default function MeetingBotApp() {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
-      // --- [FIX 2] Add desktopStreamRef to stop ---
       if (desktopStreamRef.current) {
         desktopStreamRef.current.getTracks().forEach(track => track.stop());
         desktopStreamRef.current = null;
@@ -571,20 +535,13 @@ export default function MeetingBotApp() {
         audioStreamRef.current.getTracks().forEach(track => track.stop());
         audioStreamRef.current = null;
       }
-      if (userMicStreamRef.current) {
-        userMicStreamRef.current.getTracks().forEach(track => track.stop());
-        userMicStreamRef.current = null;
-      }
       if (transcriptionServiceRef.current) {
         transcriptionServiceRef.current.disconnect();
-      }
-      if (audioManagerRef.current) {
-        audioManagerRef.current.cleanup();
       }
       
       setSessionStartTime(0);
 
-      setAppState(prev => ({
+      setAppState((prev: AppState) => ({
         ...prev,
         isRecording: false,
         status: 'Analysis stopped'
@@ -592,7 +549,7 @@ export default function MeetingBotApp() {
 
     } catch (error) {
       console.error('Error stopping analysis:', error);
-      setAppState(prev => ({
+      setAppState((prev: AppState) => ({
         ...prev,
         error: (error as Error).message
       }));
@@ -620,7 +577,7 @@ export default function MeetingBotApp() {
         }
       }
 
-      setAppState(prev => ({
+      setAppState((prev: AppState) => ({
         ...prev,
         isInMeeting: false,
         currentSession: null,
@@ -629,7 +586,7 @@ export default function MeetingBotApp() {
 
     } catch (error) {
       console.error('Error leaving meeting:', error);
-      setAppState(prev => ({
+      setAppState((prev: AppState) => ({
         ...prev,
         error: (error as Error).message
       }));
@@ -666,7 +623,7 @@ export default function MeetingBotApp() {
               <input
                 type="url"
                 value={appState.meetingUrl}
-                onChange={(e) => setAppState(prev => ({ ...prev, meetingUrl: e.target.value }))}
+                onChange={(e) => setAppState((prev: AppState) => ({ ...prev, meetingUrl: e.target.value }))}
                 placeholder="https://meet.google.com/xxx-xxxx-xxx"
                 className="w-full px-4 py-3 border text-black border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
                 disabled={appState.isInMeeting}

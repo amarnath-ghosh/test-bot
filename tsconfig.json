@@ -3,7 +3,7 @@
     "lib": [
       "dom",
       "dom.iterable",
-      "es6"
+      "esnext"
     ],
     "allowJs": true,
     "skipLibCheck": true,
@@ -53,12 +53,13 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    "types/**/*.d.ts",
+    "types/global.d.ts",
     "out/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
     "dist",
-    "out"
+    "out",
+    "electron"
   ]
 }

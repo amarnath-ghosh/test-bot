@@ -16,6 +16,11 @@ const electronAPI: ElectronAPI = {
   
   removeTranscriptListener: () => {
     ipcRenderer.removeAllListeners('transcript-update');
+  },
+
+  // --- ADD THIS FUNCTION ---
+  sendBotAudio: (audioData: ArrayBuffer) => {
+    ipcRenderer.send('bot-speak-data', audioData);
   }
 };
 

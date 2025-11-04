@@ -1,3 +1,11 @@
+// Define a minimal interface to avoid importing the 'electron' package
+export interface DesktopCapturerSource {
+  id: string;
+  name: string;
+  thumbnail: string; // This is a string (data URL) not an object
+  displayId?: string;
+}
+
 export interface ParticipantData {
   userId: string;
   userName: string;
@@ -89,10 +97,11 @@ export interface AudioCaptureSettings {
 
 export interface ElectronAPI {
   joinMeeting: (url: string) => Promise<{ success: boolean; webContentsId?: number }>;
-  getSources: () => Promise<Electron.DesktopCapturerSource[]>;
+  getSources: () => Promise<DesktopCapturerSource[]>; // <-- Uses our new interface
   closeMeeting: () => Promise<{ success: boolean }>;
   onTranscriptUpdate: (callback: (data: TranscriptSegment) => void) => void;
   removeTranscriptListener: () => void;
+  sendBotAudio: (audioData: ArrayBuffer) => void;
 }
 
 export interface AppState {

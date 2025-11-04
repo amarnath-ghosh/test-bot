@@ -14,8 +14,9 @@ export interface ChatMessage {
 export class GeminiService {
   private genAI: GoogleGenerativeAI;
   // --- THIS IS THE FIX ---
-  // Changed from 'gemini-1.5-flash-latest' to the standard 'gemini-pro'
-  private model: string = 'gemini-pro';
+  // Changed back to 'gemini-1.5-flash-latest' which uses the v1beta API
+  // This should resolve the 404 Not Found error.
+  private model: string = 'gemini-1.5-flash-latest';
   private chat: ChatSession | null = null;
   private generationConfig: GenerationConfig = {
     temperature: 0.7,

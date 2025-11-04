@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, desktopCapturer, DesktopCapturerSource, IpcMainInvokeEvent, session } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs'; // <-- Import File System module
 import { WindowManager } from './types';
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -25,9 +26,9 @@ class ElectronApp {
           'Content-Security-Policy': [
             isDev
               // --- THIS LINE IS MODIFIED ---
-              ? `default-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; script-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ${devUrl} wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com; style-src 'self' ${devUrl} 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:`
+              ? `default-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; script-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ${devUrl} wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' ${devUrl} 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;`
               // --- THIS LINE IS MODIFIED ---
-              : "default-src 'self'; script-src 'self'; connect-src 'self' wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:"
+              : "default-src 'self'; script-src 'self'; connect-src 'self' wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;"
           ]
         }
       });
@@ -51,7 +52,7 @@ class ElectronApp {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        preload: path.join(__dirname, 'preload.js'),
+        preload: path.join(__dirname, 'preload.js'), // <-- This is for the MAIN window
         webSecurity: true,
         allowRunningInsecureContent: false
       },
@@ -88,7 +89,7 @@ class ElectronApp {
           webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
-            preload: path.join(__dirname, 'preload.js'), 
+            preload: path.join(__dirname, 'meetingPreload.js'), // <-- MODIFIED: Use the NEW preload script
             webSecurity: true,
             allowRunningInsecureContent: false
           },
@@ -103,6 +104,23 @@ class ElectronApp {
           this.windows.meetingWindow?.show();
           resolve(this.windows.meetingWindow!.webContents.id);
         });
+
+        // --- NEW: Inject the content script after the page loads ---
+        this.windows.meetingWindow.webContents.on('did-finish-load', () => {
+          console.log('Meeting window finished loading. Injecting content script...');
+          const contentScriptPath = path.join(__dirname, 'contentScript.js');
+          
+          fs.readFile(contentScriptPath, 'utf-8', (err, script) => {
+            if (err) {
+              console.error('Failed to read content script:', err);
+              return;
+            }
+            this.windows.meetingWindow?.webContents.executeJavaScript(script)
+              .then(() => console.log('Content script injected successfully.'))
+              .catch(err => console.error('Failed to inject content script:', err));
+          });
+        });
+        // --- End of NEW ---
 
         this.windows.meetingWindow.on('closed', () => {
           this.windows.meetingWindow = null;
@@ -157,6 +175,17 @@ class ElectronApp {
       } catch (error) {
         console.error('Error closing meeting:', error);
         return { success: false };
+      }
+    });
+
+    // --- NEW: IPC handler to relay audio from UI to meeting window ---
+    ipcMain.on('bot-speak-data', (event, audioData: ArrayBuffer) => {
+      // Check if the message is from the mainWindow
+      if (event.sender === this.windows.mainWindow?.webContents) {
+        // Relay the message to the meetingWindow
+        if (this.windows.meetingWindow) {
+          this.windows.meetingWindow.webContents.send('bot-speak', audioData);
+        }
       }
     });
   }

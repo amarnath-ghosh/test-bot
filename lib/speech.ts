@@ -4,7 +4,7 @@ export interface SpeechConfig {
   rate?: number;
   pitch?: number;
   volume?: number;
-  voice?: string;
+  voice?: string; // Model name, e.g., "aura-asteria-en"
 }
 
 export interface VoiceInfo {
@@ -19,6 +19,7 @@ export class SpeechService {
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private config: Required<SpeechConfig>;
   private availableVoices: SpeechSynthesisVoice[] = [];
+  private deepgramApiKey: string | undefined;
 
   // AudioContext for routing bot audio
   private audioContext: AudioContext | null = null;
@@ -29,9 +30,11 @@ export class SpeechService {
       rate: 1.0,
       pitch: 1.0,
       volume: 1.0,
-      voice: '',
+      voice: 'aura-asteria-en', // Default to a Deepgram Aura voice
       ...config,
     };
+    
+    this.deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
 
     // Lazy load audio context
     if (typeof window !== 'undefined' && !this.audioContext) {
@@ -42,7 +45,7 @@ export class SpeechService {
   }
 
   private initializeVoices(): void {
-    // Voices might not be immediately available
+    // This is for local speech
     const updateVoices = () => {
       this.availableVoices = this.synth.getVoices();
     };
@@ -159,61 +162,39 @@ export class SpeechService {
   }
 
   /**
-   * Creates a new MediaStreamTrack containing the bot's speech.
-   * This track is intended to be sent TO THE MEETING.
+   * Creates an ArrayBuffer of the bot's speech by calling a Cloud TTS API.
+   * This audio data is intended to be sent TO THE MEETING.
    */
-  async createAudioTrack(text: string): Promise<MediaStreamTrack> {
-    if (!this.audioContext) {
-      throw new Error('AudioContext is not initialized.');
-    }
-
-    // Ensure context is running (it's often suspended on page load)
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
+  async createAudioData(text: string): Promise<ArrayBuffer> {
+    if (!this.deepgramApiKey || this.deepgramApiKey === "YOUR_DEEPGRAM_API_KEY_HERE") {
+      console.error('Deepgram API key is not set. Cannot generate bot speech.');
+      throw new Error('Deepgram API key is not set.');
     }
     
-    const audioContext = this.audioContext;
-    const destination = audioContext.createMediaStreamDestination();
+    // Use Deepgram's Speak API
+    const url = `https://api.deepgram.com/v1/speak?model=${this.config.voice}`;
+    
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${this.deepgramApiKey}`,
+        },
+        body: JSON.stringify({ text }),
+      });
 
-    // --- Placeholder: Generate a Tone ---
-    // This is a placeholder to prove the track-swapping works.
-    // To generate real speech, you would:
-    // 1. Fetch an audio blob from a Cloud TTS API (e.g., Deepgram, Google).
-    // 2. Decode it: const audioBuffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
-    // 3. Create a source: const source = audioContext.createBufferSource(); source.buffer = audioBuffer;
-    // 4. Connect source to destination: source.connect(destination);
-    // 5. Start source: source.start(0);
-    // 6. Listen for source.onended to stop the track.
-
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-
-    oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // A4 note
-    oscillator.type = 'sine';
-    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-
-    oscillator.connect(gainNode);
-    gainNode.connect(destination);
-
-    oscillator.start();
-
-    // Stop after estimated speech duration (rough calculation)
-    const estimatedDuration = text.length * 0.1; // 100ms per character
-    const audioTrack = destination.stream.getAudioTracks()[0];
-
-    setTimeout(() => {
-      try {
-        oscillator.stop();
-        oscillator.disconnect();
-        gainNode.disconnect();
-        // Manually stop the track. This fires the 'onended' event
-        // which app/page.tsx listens for to restore the user's mic.
-        audioTrack.stop();
-      } catch (e) {
-        console.warn("Audio node cleanup error:", e);
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(`Deepgram TTS API error: ${err.reason || response.statusText}`);
       }
-    }, estimatedDuration * 1000);
+      
+      // Return the audio data as an ArrayBuffer
+      return await response.arrayBuffer();
 
-    return audioTrack;
+    } catch (error) {
+      console.error('Error generating bot audio data:', error);
+      throw error;
+    }
   }
 }
