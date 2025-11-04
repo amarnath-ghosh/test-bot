@@ -13,7 +13,9 @@ export interface ChatMessage {
 
 export class GeminiService {
   private genAI: GoogleGenerativeAI;
-  private model: string = 'gemini-1.5-flash';
+  // --- THIS IS THE FIX ---
+  // Changed from 'gemini-1.5-flash-latest' to the standard 'gemini-pro'
+  private model: string = 'gemini-pro';
   private chat: ChatSession | null = null;
   private generationConfig: GenerationConfig = {
     temperature: 0.7,
@@ -72,7 +74,8 @@ export class GeminiService {
     transcriptContext: TranscriptSegment[]
   ): Promise<string> {
     if (!this.chat) {
-      throw new Error('Chat session is not initialized');
+      this.startChat(); // Re-initialize chat if it's null
+      if (!this.chat) throw new Error('Chat session could not be initialized');
     }
 
     // Create the prompt
@@ -95,13 +98,45 @@ export class GeminiService {
       const response = result.response;
       return response.text();
     } catch (error) {
-      // THIS IS THE MODIFIED BLOCK
       console.error('Error generating Gemini response:', error);
-      // Now you will see the *real* error in your console
-      return "I'm sorry, I encountered an error while processing that request.";
+      // Re-throw the error so it's visible in the main page's catch block
+      throw error;
     }
   }
 
-  // (rest of the file is the same as before)
-  // ...
+  // ... (rest of the file is the same) ...
+  public async generateResponseStream(
+    question: string,
+    transcriptContext: TranscriptSegment[],
+    onChunk: (chunk: string) => void
+  ): Promise<void> {
+    if (!this.chat) {
+      this.startChat();
+      if (!this.chat) throw new Error('Chat session could not be initialized');
+    }
+
+    const fullTranscript = this.formatTranscript(transcriptContext);
+    const prompt = `
+      ---
+      MEETING TRANSCRIPT (SO FAR):
+      ${fullTranscript}
+      ---
+      
+      USER QUESTION:
+      "${question}"
+      ---
+
+      Based on the transcript, please answer the user's question.
+    `;
+
+    try {
+      const result = await this.chat.sendMessageStream(prompt);
+      for await (const chunk of result.stream) {
+        onChunk(chunk.text());
+      }
+    } catch (error) {
+      console.error('Error generating Gemini stream:', error);
+      onChunk("I'm sorry, I encountered an error.");
+    }
+  }
 }

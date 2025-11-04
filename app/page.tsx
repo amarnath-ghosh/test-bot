@@ -5,7 +5,7 @@ import { TranscriptionService } from '@/lib/transcription';
 import { SpeechService } from '@/lib/speech';
 import { AudioManager } from '@/lib/audioManager';
 import { AnalyticsService } from '@/lib/analytics';
-import { GeminiService } from '@/lib/aiService';
+import { GeminiService } from '@/lib/aiService'; 
 import {
   AppState,
   TranscriptSegment,
@@ -34,6 +34,7 @@ export default function MeetingBotApp() {
 
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [botResponses, setBotResponses] = useState<BotResponse[]>([]);
+  const [sessionStartTime, setSessionStartTime] = useState<number>(0);
 
   // Service instances
   const transcriptionServiceRef = useRef<TranscriptionService | null>(null);
@@ -44,7 +45,10 @@ export default function MeetingBotApp() {
 
   // Media references
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  // --- [FIX 2] This ref will keep the main stream alive ---
+  const desktopStreamRef = useRef<MediaStream | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
+  const userMicStreamRef = useRef<MediaStream | null>(null);
 
   // Initialize services
   useEffect(() => {
@@ -56,10 +60,6 @@ export default function MeetingBotApp() {
           pitch: 1.0,
           volume: 0.8,
         });
-        
-        // Pass the peer connection (if any) to the audio manager
-        // For browser-only, we'll let it be null for now
-        // It will grab the sender from the captured stream later
         audioManagerRef.current = new AudioManager(); 
 
         setAppState(prev => ({ ...prev, status: 'Services initialized' }));
@@ -67,7 +67,7 @@ export default function MeetingBotApp() {
         console.error('Failed to initialize services:', error);
         setAppState(prev => ({
           ...prev,
-          error: `Failed to initialize services: ${error}`,
+          error: (error as Error).message,
           status: 'Initialization failed',
         }));
       }
@@ -94,19 +94,30 @@ export default function MeetingBotApp() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
+    // --- [FIX 2] Add desktopStreamRef to cleanup ---
+    if (desktopStreamRef.current) {
+      desktopStreamRef.current.getTracks().forEach(track => track.stop());
+      desktopStreamRef.current = null;
+    }
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach(track => track.stop());
+      audioStreamRef.current = null;
+    }
+    if (userMicStreamRef.current) {
+      userMicStreamRef.current.getTracks().forEach(track => track.stop());
+      userMicStreamRef.current = null;
     }
   }, []);
 
   const handleJoinMeeting = async (): Promise<void> => {
-    // ... (This function is unchanged)
     if (!appState.meetingUrl.trim()) {
       setAppState(prev => ({ ...prev, error: 'Please enter a valid meeting URL' }));
       return;
     }
+
     try {
       setAppState(prev => ({ ...prev, status: 'Joining meeting...', error: null }));
+
       if (window.electronAPI) {
         const result = await window.electronAPI.joinMeeting(appState.meetingUrl);
         if (result.success) {
@@ -123,6 +134,7 @@ export default function MeetingBotApp() {
           throw new Error('Failed to join meeting');
         }
       } else {
+        // Fallback: open in new browser tab
         window.open(appState.meetingUrl, '_blank', 'width=1024,height=768');
         setAppState(prev => ({
           ...prev,
@@ -138,14 +150,13 @@ export default function MeetingBotApp() {
       console.error('Error joining meeting:', error);
       setAppState(prev => ({
         ...prev,
-        error: `Failed to join meeting: ${error}`,
+        error: (error as Error).message,
         status: 'Join failed',
       }));
     }
   };
 
   const handleStartAnalysis = async (): Promise<void> => {
-    // ... (This function is mostly unchanged, just added Gemini init)
     try {
       setAppState(prev => ({ ...prev, status: 'Initializing...', error: null }));
 
@@ -155,6 +166,7 @@ export default function MeetingBotApp() {
       if (apiKey && apiKey !== 'your_deepgram_api_key_here') {
         console.log('Deepgram API key found, initializing transcription service...');
         transcriptionServiceRef.current = new TranscriptionService({ apiKey });
+
         await transcriptionServiceRef.current.connect(
           handleTranscriptUpdate,
           handleTranscriptionError
@@ -171,7 +183,7 @@ export default function MeetingBotApp() {
 
       // Initialize Gemini Service
       const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-      if (geminiApiKey) {
+      if (geminiApiKey && geminiApiKey !== 'your_gemini_api_key_here') {
         geminiServiceRef.current = new GeminiService(geminiApiKey);
         console.log('✓ GeminiService initialized');
       } else {
@@ -180,6 +192,8 @@ export default function MeetingBotApp() {
 
       // Start audio capture
       await startAudioCapture();
+      
+      setSessionStartTime(Date.now());
 
       setAppState(prev => ({
         ...prev,
@@ -201,88 +215,151 @@ export default function MeetingBotApp() {
   };
 
   const startAudioCapture = async (): Promise<void> => {
+    let transcriptionAudioStream: MediaStream;
+
     try {
-      // MODIFIED LINE
-      setAppState(prev => ({ ...prev, status: 'Requesting permission. IMPORTANT: Please check "Share tab audio" or "Share system audio" to capture all participants.' }));
+      if (window.electronAPI) {
+        // --- ELECTRON-SPECIFIC AUDIO CAPTURE ---
+        console.log('Electron API found. Using desktopCapturer.');
+        setAppState(prev => ({ ...prev, status: 'Getting audio sources...' }));
 
-      // Request screen/tab capture with audio
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: 'monitor',
-        },
-        audio: true,
-      });
-      
-      const hasAudio = displayStream.getAudioTracks().length > 0;
-      let userMicStream: MediaStream | null = null;
-
-      if (!hasAudio) {
-        console.warn('No audio track in display stream. Will try to get microphone audio instead.');
-        try {
-          userMicStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: DEFAULT_AUDIO_SETTINGS.echoCancellation,
-              noiseSuppression: DEFAULT_AUDIO_SETTINGS.noiseSuppression,
-              autoGainControl: DEFAULT_AUDIO_SETTINGS.autoGainControl,
-            },
-          });
-        } catch (micError) {
-          console.error('Could not get microphone:', micError);
-          throw new Error(
-            'No audio available. Please enable "Share audio" when selecting screen, or grant microphone permission.'
-          );
+        const sources = await window.electronAPI.getSources();
+        const entireScreenSource = sources.find(source => source.id.startsWith('screen:'));
+        
+        if (!entireScreenSource) {
+          throw new Error("Could not find a screen to capture.");
         }
+
+        console.log('Capturing source:', entireScreenSource.name);
+
+        const constraints = {
+          audio: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: entireScreenSource.id,
+            },
+          },
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: entireScreenSource.id,
+            },
+          },
+        };
+        // @ts-ignore
+        const fullDesktopStream = await navigator.mediaDevices.getUserMedia(constraints);
+        // --- [FIX 2] Save the full stream to the ref to keep it alive ---
+        desktopStreamRef.current = fullDesktopStream;
+        transcriptionAudioStream = new MediaStream(fullDesktopStream.getAudioTracks());
+        
+      } else {
+        // --- BROWSER-BASED FALLBACK (getDisplayMedia) ---
+        console.log('No Electron API found. Falling back to getDisplayMedia.');
+        setAppState(prev => ({ ...prev, status: 'Requesting permission. IMPORTANT: Please check "Share tab audio" or "Share system audio" to capture all participants.' }));
+        
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+
+        // --- [FIX 2] Save the full stream to the ref to keep it alive ---
+        desktopStreamRef.current = displayStream;
+
+        const hasAudio = displayStream.getAudioTracks().length > 0;
+        if (!hasAudio) {
+          throw new Error('No audio available. Please enable "Share audio" when selecting screen.');
+        }
+        transcriptionAudioStream = new MediaStream(displayStream.getAudioTracks());
       }
       
-      // --- THIS IS THE NEW LOGIC FOR PROBLEM 4 ---
-      // We need to create ONE stream that has the meeting audio (for transcription)
-      // and ANOTHER stream that has the user's mic (for speaking)
-      
-      // This stream is for TRANSCRIPTION
-      const transcriptionAudioStream = hasAudio ? new MediaStream(displayStream.getAudioTracks()) : userMicStream!;
-      audioStreamRef.current = transcriptionAudioStream; // Save for MediaRecorder
-      
-      // This stream is for the BOT to SPEAK TO THE MEETING
-      // We need to get the user's mic track to replace it.
-      // If system audio was NOT captured, userMicStream is already available.
-      // If system audio WAS captured, we need to ask for the mic separately.
-      if (hasAudio) {
-         try {
-          userMicStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: DEFAULT_AUDIO_SETTINGS.echoCancellation,
-              noiseSuppression: DEFAULT_AUDIO_SETTINGS.noiseSuppression,
-              autoGainControl: DEFAULT_AUDIO_SETTINGS.autoGainControl,
-            },
-          });
-        } catch (micError) {
-           console.error('Could not get microphone for bot speaking:', micError);
-           throw new Error(
-            'Could not get microphone. Please grant permission to allow the bot to speak.'
-          );
+      audioStreamRef.current = transcriptionAudioStream;
+      console.log('✓ Audio stream obtained for transcription.');
+
+      // --- Get User's Microphone (for speaking and bot-swap) ---
+      try {
+        const micStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: DEFAULT_AUDIO_SETTINGS 
+        });
+        userMicStreamRef.current = micStream;
+        console.log('✓ Capturing user microphone for speaking.');
+        
+        if (audioManagerRef.current) {
+            audioManagerRef.current.initializeOriginalTrack(DEFAULT_AUDIO_SETTINGS);
+            console.log("AudioManager initialized with user's mic track.");
         }
+
+      } catch (micError) {
+         console.error('Could not get microphone:', micError);
+         throw new Error(
+            'Microphone permission is required for the bot to speak.'
+         );
       }
       
-      // --- END NEW LOGIC ---
+      // --- Start MediaRecorder ---
+      const supportedTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/wav',
+        'audio/mp4',
+      ];
 
-      // Create MediaRecorder with the transcription-only stream
-      const mediaRecorder = new MediaRecorder(transcriptionAudioStream, {});
+      let selectedType = '';
+      for (const type of supportedTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          selectedType = type;
+          console.log(`✓ Supported MIME type found: ${type}`);
+          break;
+        }
+      }
+
+      if (!selectedType) {
+        console.warn('No specific MIME type supported, using browser default.');
+      }
+      
+      const options: MediaRecorderOptions = selectedType ? { mimeType: selectedType } : {};
+      const mediaRecorder = new MediaRecorder(transcriptionAudioStream, options);
+      console.log(`MediaRecorder initialized with type: ${mediaRecorder.mimeType || 'default'}`);
+      
       mediaRecorderRef.current = mediaRecorder;
-      
-      // ... (rest of mediaRecorder setup is unchanged)
+
       mediaRecorder.ondataavailable = async (event: BlobEvent) => {
         if (event.data && event.data.size > 0) {
           await processAudioChunk(event.data);
         }
       };
+
       mediaRecorder.onerror = (event: Event) => {
-         setAppState(prev => ({ ...prev, error: 'Recording error.' }));
+        console.error('MediaRecorder error:', event);
+        setAppState(prev => ({
+          ...prev,
+          error: 'Recording error occurred. Please try again.',
+          status: 'Recording failed'
+        }));
       };
+
       mediaRecorder.onstart = () => {
-         setAppState(prev => ({ ...prev, status: 'Recording and analyzing...' }));
+        console.log('✓ MediaRecorder started successfully');
+        setAppState(prev => ({ 
+          ...prev, 
+          status: 'Recording and analyzing meeting audio...' 
+        }));
       };
-      
+
+      mediaRecorder.onstop = () => {
+        console.log('MediaRecorder stopped');
+        // If recording stops unexpectedly, try to restart it
+        if (appState.isRecording) {
+            console.warn("MediaRecorder stopped unexpectedly. Restarting capture...");
+            startAudioCapture().catch(err => {
+                console.error("Failed to restart audio capture:", err);
+                setAppState(prev => ({...prev, error: "Audio capture failed and could not be restarted."}));
+            });
+        }
+      };
+
       mediaRecorder.start(1000);
+      console.log('MediaRecorder.start() called');
 
     } catch (error) {
       console.error('Full error in startAudioCapture:', error);
@@ -292,22 +369,21 @@ export default function MeetingBotApp() {
   };
 
 
-  const processAudioChunk = async (audioBlob: Blob): Promise<void> => {
-    // ... (This function is unchanged)
+ const processAudioChunk = async (audioBlob: Blob): Promise<void> => {
     try {
       if (transcriptionServiceRef.current?.isWebSocketConnected()) {
         const arrayBuffer = await audioBlob.arrayBuffer();
         transcriptionServiceRef.current.sendAudio(arrayBuffer);
-      } else {
+      } else if (!transcriptionServiceRef.current) {
         // Mock transcription logic
-        if (Math.random() > 0.9) {
-          const mockTexts = ['Hello everyone...'];
+        if (Math.random() > 0.9) { 
+          const mockTexts = [ 'Hello bot, can you summarize?', 'I have a question for the bot.' ];
           const mockSegment: TranscriptSegment = {
-            speaker: `Speaker ${Math.floor(Math.random() * 3)}`,
-            speakerIndex: Math.floor(Math.random() * 3),
+            speaker: `Speaker ${Math.floor(Math.random() * 2)}`,
+            speakerIndex: Math.floor(Math.random() * 2),
             text: mockTexts[Math.floor(Math.random() * mockTexts.length)],
-            startTime: Date.now(),
-            endTime: Date.now() + 2000,
+            startTime: (Date.now() - sessionStartTime) / 1000,
+            endTime: (Date.now() - sessionStartTime) / 1000 + 2,
             confidence: 0.95,
             isFinal: true,
           };
@@ -316,6 +392,7 @@ export default function MeetingBotApp() {
             channel: { alternatives: [{ transcript: mockSegment.text, confidence: mockSegment.confidence, words: [] }] },
             metadata: { request_id: '', model_info: { name: 'mock', version: '1.0' } },
           };
+          console.log('🎤 Mock transcript:', mockSegment.text);
           handleTranscriptUpdate(mockSegment, mockData);
         }
       }
@@ -325,8 +402,9 @@ export default function MeetingBotApp() {
   };
 
   const handleTranscriptUpdate = useCallback(
-    // ... (This function is unchanged from the previous step)
     (segment: TranscriptSegment, data: DeepgramResponse): void => {
+      console.log('Transcript:', segment.text, 'Is Final:', data.is_final);
+
       if (analyticsServiceRef.current) {
         analyticsServiceRef.current.addTranscriptSegment(segment);
         const sentiment = analyticsServiceRef.current.analyzeSentiment(segment.text);
@@ -335,10 +413,12 @@ export default function MeetingBotApp() {
           sentiment
         );
       }
+
       setTranscript(prev => {
         const existingIndex = prev.findIndex(
           s => s.speakerIndex === segment.speakerIndex && !s.isFinal
         );
+
         if (data.is_final) {
           segment.isFinal = true;
           if (existingIndex !== -1) {
@@ -358,16 +438,16 @@ export default function MeetingBotApp() {
           }
         }
       });
-      if (data.is_final) {
+
+      if (data.is_final && segment.text.trim().length > 0) {
         checkForBotMention(segment);
       }
     },
-    []
+    [sessionStartTime] 
   );
 
   const handleTranscriptionError = useCallback((error: Error): void => {
-    // ... (This function is unchanged)
-     console.error('Transcription error:', error);
+    console.error('Transcription error:', error);
     setAppState(prev => ({
       ...prev,
       error: `Transcription error: ${error.message}`,
@@ -376,27 +456,41 @@ export default function MeetingBotApp() {
   }, []);
 
   const checkForBotMention = (segment: TranscriptSegment): void => {
-    // ... (This function is unchanged)
     const text = segment.text.toLowerCase();
-    const botTriggers = ['bot', 'assistant', 'ai', 'hey bot', 'bot please'];
+    // Added your log's mis-transcriptions to the trigger list
+    const botTriggers = ['bot', 'assistant', 'ai', 'hey bot', 'bot please', 'hello board', 'hello bob'];
+    
     if (botTriggers.some(trigger => text.includes(trigger))) {
       handleBotResponse(segment);
     }
   };
 
-
-  // --- THIS IS THE NEWLY MODIFIED FUNCTION FOR PROBLEM 4 ---
   const handleBotResponse = async (segment: TranscriptSegment): Promise<void> => {
-    if (!geminiServiceRef.current || !speechServiceRef.current || !audioManagerRef.current) {
-      console.warn('A required service (Gemini, Speech, or Audio) is not initialized. Skipping bot response.');
+    if (!geminiServiceRef.current) {
+      console.warn('Gemini service not initialized. Skipping bot response.');
       return;
     }
+    
+    if (segment.text.toLowerCase().includes("i'm sorry, i encountered an error")) {
+        console.warn("Detected audio feedback loop. Ignoring.");
+        return;
+    }
+    // [FIX 3] Ignore the feedback loop from the tone
+    if (segment.text.toLowerCase().includes("gemini") || segment.text.toLowerCase().includes("flash")) {
+        console.warn("Detected audio feedback loop of Gemini error. Ignoring.");
+        return;
+    }
+
 
     try {
       const question = segment.text;
-      const currentTranscript = transcript;
+      
+      let currentTranscript: TranscriptSegment[] = [];
+      setTranscript(prev => {
+        currentTranscript = prev;
+        return prev;
+      });
 
-      // Add "Bot is thinking..." message
       const thinkingMessage: BotResponse = {
         speaker: 'Bot',
         text: '...',
@@ -404,7 +498,6 @@ export default function MeetingBotApp() {
       };
       setBotResponses(prev => [...prev, thinkingMessage]);
 
-      // Generate the response text
       const responseText = await geminiServiceRef.current.generateResponse(
         question,
         currentTranscript
@@ -416,85 +509,104 @@ export default function MeetingBotApp() {
         timestamp: Date.now(),
       };
 
-      // Replace "thinking" message with the actual response
       setBotResponses(prev => {
         const updated = [...prev];
-        updated[updated.length - 1] = newResponse;
+        const lastResponse = updated[updated.length - 1];
+        if (lastResponse && lastResponse.text === '...') {
+          updated[updated.length - 1] = newResponse;
+        } else {
+          updated.push(newResponse);
+        }
         return updated;
       });
-      
-      // --- NEW AUDIO LOGIC ---
-      // 1. Play the response *locally* for the user to hear
-      // We do this *without* await so it plays immediately
-      speechServiceRef.current.speak(
-        responseText,
-        () => console.log('Bot finished speaking locally'),
-        error => console.error('Local speech error:', error)
-      );
-      
-      // 2. Create the bot's audio track to send *to the meeting*
-      const botAudioTrack = await speechServiceRef.current.createAudioTrack(responseText);
-      
-      // 3. Save the user's mic sender (if not already saved)
-      await audioManagerRef.current.saveCurrentAudioSender();
 
-      // 4. Hot-swap the user's mic for the bot's audio
-      console.log('Replacing user mic with bot audio...');
-      await audioManagerRef.current.replaceWithSynthetic(botAudioTrack);
+      // --- Bot speaking logic ---
+      if (speechServiceRef.current && audioManagerRef.current) {
+        try {
+            console.log("Generating bot audio track...");
+            const botAudioTrack = await speechServiceRef.current.createAudioTrack(responseText);
+            console.log("Bot audio track (tone) created.", botAudioTrack);
+            
+            // --- [FIX 3] Commented out to prevent audio feedback loop ---
+            // console.warn("Playing bot's audio (tone) locally for testing.");
+            // const audio = new Audio();
+            // audio.srcObject = new MediaStream([botAudioTrack]);
+            // audio.play();
 
-      // 5. Listen for the bot track to end
-      botAudioTrack.onended = async () => {
-        console.log('Bot audio track-ended. Restoring user mic...');
-        await audioManagerRef.current?.restoreOriginalTrack();
-      };
-      
+            // The real hot-swap logic is still pending a real PeerConnection
+            console.warn("Bot audio streaming to meeting is NOT IMPLEMENTED.");
+            // await audioManagerRef.current.saveCurrentAudioSender();
+            // await audioManagerRef.current.replaceWithSynthetic(botAudioTrack);
+            // botAudioTrack.onended = () => audioManagerRef.current.restoreOriginalTrack();
+
+        } catch(audioError) {
+             console.error("Failed to stream bot audio:", audioError);
+        }
+      }
+
     } catch (error) {
-      console.error('Error in handleBotResponse:', error);
-      // Update the "thinking" message to an error
+      console.error('Error generating bot response:', error);
       setBotResponses(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1].text = "Sorry, I had trouble responding.";
-          return updated;
+        const updated = [...prev];
+        const lastResponse = updated[updated.length - 1];
+        if (lastResponse && lastResponse.text === '...') {
+            lastResponse.text = "Sorry, I had trouble responding.";
+        }
+        return updated;
       });
     }
   };
 
   const handleStopAnalysis = (): void => {
-    // ... (This function is unchanged)
     try {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
+      // --- [FIX 2] Add desktopStreamRef to stop ---
+      if (desktopStreamRef.current) {
+        desktopStreamRef.current.getTracks().forEach(track => track.stop());
+        desktopStreamRef.current = null;
+      }
       if (audioStreamRef.current) {
         audioStreamRef.current.getTracks().forEach(track => track.stop());
+        audioStreamRef.current = null;
+      }
+      if (userMicStreamRef.current) {
+        userMicStreamRef.current.getTracks().forEach(track => track.stop());
+        userMicStreamRef.current = null;
       }
       if (transcriptionServiceRef.current) {
         transcriptionServiceRef.current.disconnect();
       }
       if (audioManagerRef.current) {
-        audioManagerRef.current.cleanup(); // Clean up audio manager too
+        audioManagerRef.current.cleanup();
       }
+      
+      setSessionStartTime(0);
+
       setAppState(prev => ({
         ...prev,
         isRecording: false,
-        status: 'Analysis stopped',
+        status: 'Analysis stopped'
       }));
+
     } catch (error) {
       console.error('Error stopping analysis:', error);
       setAppState(prev => ({
         ...prev,
-        error: `Failed to stop analysis: ${error}`,
+        error: (error as Error).message
       }));
     }
   };
 
   const handleLeaveMeeting = async (): Promise<void> => {
-    // ... (This function is unchanged)
     try {
       handleStopAnalysis();
+
       if (window.electronAPI) {
         await window.electronAPI.closeMeeting();
       }
+
       if (analyticsServiceRef.current) {
         const sessionData = analyticsServiceRef.current.endSession();
         if (sessionData) {
@@ -503,31 +615,31 @@ export default function MeetingBotApp() {
             format: 'json',
             includeTranscript: true,
             includeSentiment: true,
-            includeWordTiming: false,
+            includeWordTiming: false
           });
         }
       }
+
       setAppState(prev => ({
         ...prev,
         isInMeeting: false,
         currentSession: null,
-        status: 'Left meeting and exported data',
+        status: 'Left meeting and exported data'
       }));
+
     } catch (error) {
       console.error('Error leaving meeting:', error);
       setAppState(prev => ({
         ...prev,
-        error: `Failed to leave meeting: ${error}`,
+        error: (error as Error).message
       }));
     }
   };
 
   const formatTimestamp = (timestamp: number): string => {
-    // ... (This function is unchanged)
     return new Date(timestamp).toLocaleTimeString();
   };
 
-  // --- JSX is unchanged from the previous step ---
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="container mx-auto px-4 py-8">
@@ -545,7 +657,7 @@ export default function MeetingBotApp() {
           <h2 className="text-2xl font-semibold mb-4 text-gray-800">
             Meeting Controls
           </h2>
-
+          
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -554,7 +666,7 @@ export default function MeetingBotApp() {
               <input
                 type="url"
                 value={appState.meetingUrl}
-                onChange={e => setAppState(prev => ({ ...prev, meetingUrl: e.target.value }))}
+                onChange={(e) => setAppState(prev => ({ ...prev, meetingUrl: e.target.value }))}
                 placeholder="https://meet.google.com/xxx-xxxx-xxx"
                 className="w-full px-4 py-3 border text-black border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
                 disabled={appState.isInMeeting}
@@ -587,7 +699,7 @@ export default function MeetingBotApp() {
                       Stop Analysis
                     </button>
                   )}
-
+                  
                   <button
                     onClick={handleLeaveMeeting}
                     className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
@@ -607,7 +719,7 @@ export default function MeetingBotApp() {
                     {appState.error || appState.status}
                   </p>
                 </div>
-
+                
                 {appState.isRecording && (
                   <div className="flex items-center space-x-2">
                     <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
@@ -638,14 +750,10 @@ export default function MeetingBotApp() {
                         {segment.speaker}
                       </span>
                       <span className="text-xs text-gray-500">
-                        {formatTimestamp(segment.startTime)}
+                        {new Date(sessionStartTime + segment.startTime * 1000).toLocaleTimeString()}
                       </span>
                     </div>
-                    <p
-                      className={`text-sm text-gray-800 ${
-                        !segment.isFinal ? 'opacity-70' : ''
-                      }`}
-                    >
+                    <p className={`text-sm text-gray-800 ${!segment.isFinal ? 'opacity-70' : ''}`}>
                       {segment.text}
                     </p>
                     <span className="text-xs text-gray-400">
@@ -665,18 +773,13 @@ export default function MeetingBotApp() {
             <div className="h-96 overflow-y-auto bg-gray-50 rounded-lg p-4 space-y-3">
               {botResponses.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-gray-500">
-                  <p>
-                    No bot responses yet. Mention the bot (e.g., "Hey Bot, summarize") to get a
-                    response.
-                  </p>
+                  <p>No bot responses yet. Mention the bot in the meeting to get responses.</p>
                 </div>
               ) : (
                 botResponses.map((response, index) => (
                   <div key={index} className="bg-blue-100 rounded-lg p-3">
                     <div className="flex items-center mb-1">
-                      <span className="text-sm font-medium text-blue-800">
-                        {response.speaker}
-                      </span>
+                      <span className="text-sm font-medium text-blue-800">{response.speaker}</span>
                       <span className="text-xs text-blue-600 ml-2">
                         {formatTimestamp(response.timestamp)}
                       </span>
@@ -702,24 +805,22 @@ export default function MeetingBotApp() {
                   {new Set(transcript.map(s => s.speakerIndex)).size}
                 </p>
               </div>
-
+              
               <div className="bg-green-50 rounded-lg p-4">
                 <h3 className="text-sm font-medium text-green-800">Duration</h3>
                 <p className="text-2xl font-bold text-green-900">
-                  {transcript.length > 0
-                    ? Math.round((Date.now() - transcript[0].startTime) / 60000)
-                    : 0}
-                  m
+                  {sessionStartTime > 0 ? 
+                    Math.round((Date.now() - sessionStartTime) / 60000) : 0}m
                 </p>
               </div>
-
+              
               <div className="bg-purple-50 rounded-lg p-4">
                 <h3 className="text-sm font-medium text-purple-800">Words</h3>
                 <p className="text-2xl font-bold text-purple-900">
-                  {transcript.reduce((sum, s) => sum + s.text.split(' ').length, 0)}
+                  {transcript.reduce((sum, s) => sum + (s.text ? s.text.split(' ').length : 0), 0)}
                 </p>
               </div>
-
+              
               <div className="bg-orange-50 rounded-lg p-4">
                 <h3 className="text-sm font-medium text-orange-800">Responses</h3>
                 <p className="text-2xl font-bold text-orange-900">
