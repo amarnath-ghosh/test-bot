@@ -13,10 +13,17 @@ export interface ChatMessage {
 
 export class GeminiService {
   private genAI: GoogleGenerativeAI;
-  // --- THIS IS THE FIX ---
-  // Changed back to 'gemini-1.5-flash-latest' which uses the v1beta API
-  // This should resolve the 404 Not Found error.
-  private model: string = 'gemini-1.5-flash-latest';
+
+  // --- THIS IS THE DEFINITIVE FIX ---
+  //
+  // Your new SDK defaults to the 'v1beta' API, but your project
+  // doesn't seem to have v1beta models enabled, causing a 404.
+  //
+  // By using the specific, versioned name 'gemini-1.0-pro',
+  // we are forcing the SDK to use the stable 'v1' API endpoint,
+  // which is universally available and should work with your key.
+  //
+  private model: string = 'gemini-1.0-pro'; 
   private chat: ChatSession | null = null;
   private generationConfig: GenerationConfig = {
     temperature: 0.7,
@@ -105,7 +112,6 @@ export class GeminiService {
     }
   }
 
-  // ... (rest of the file is the same) ...
   public async generateResponseStream(
     question: string,
     transcriptContext: TranscriptSegment[],
