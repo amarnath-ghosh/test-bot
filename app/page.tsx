@@ -34,6 +34,20 @@ export default function MeetingBotApp() {
 
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [botResponses, setBotResponses] = useState<BotResponse[]>([]);
+  // Store a simplified full transcript for the bot (speaker, text, timestamp, confidence)
+  const [fullTranscript, setFullTranscript] = useState<Array<{
+    speaker: string;
+    text: string;
+    timestamp: string;
+    confidence?: number;
+  }>>([]);
+  // Keep a ref in sync with `fullTranscript` so we can read latest value synchronously
+  const fullTranscriptRef = useRef<Array<{
+    speaker: string;
+    text: string;
+    timestamp: string;
+    confidence?: number;
+  }>>([]);
   const [sessionStartTime, setSessionStartTime] = useState<number>(0);
 
   // Service instances
@@ -172,7 +186,8 @@ export default function MeetingBotApp() {
       // Initialize Gemini Service
       const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
       if (geminiApiKey && geminiApiKey !== 'your_gemini_api_key_here') {
-        geminiServiceRef.current = new GeminiService(geminiApiKey);
+        // GeminiService constructor doesn't accept args; it reads the API key from env.
+        geminiServiceRef.current = new GeminiService();
         console.log('✓ GeminiService initialized');
       } else {
         console.warn('⚠ No Gemini API key found. Bot responses will be disabled.');
@@ -407,6 +422,28 @@ export default function MeetingBotApp() {
       });
 
       if (data.is_final && segment.text.trim().length > 0) {
+        // Append a simplified entry for the bot to consume as context
+        try {
+          const entryTimestamp = new Date(sessionStartTime + segment.startTime * 1000).toLocaleTimeString();
+          const newEntry = {
+            speaker: segment.speaker || `Speaker ${segment.speakerIndex}`,
+            text: segment.text,
+            timestamp: entryTimestamp,
+            confidence: segment.confidence,
+          };
+          setFullTranscript(prev => {
+            const next = [...prev, newEntry];
+            try {
+              fullTranscriptRef.current = next;
+            } catch (e) {
+              // no-op
+            }
+            return next;
+          });
+        } catch (err) {
+          console.warn('Failed to append to fullTranscript:', err);
+        }
+
         checkForBotMention(segment);
       }
     },
@@ -430,33 +467,27 @@ export default function MeetingBotApp() {
       handleBotResponse(segment);
     }
   };
-
-  const handleBotResponse = async (segment: TranscriptSegment): Promise<void> => {
+  const handleBotResponse = async (input: TranscriptSegment | string): Promise<void> => {
     if (!geminiServiceRef.current) {
       console.warn('Gemini service not initialized. Skipping bot response.');
       return;
     }
-    
-    // Feedback loop checks (these are good, keep them)
-    if (segment.text.toLowerCase().includes("i'm sorry, i encountered an error")) {
-        console.warn("Detected audio feedback loop. Ignoring.");
-        return;
-    }
-    if (segment.text.toLowerCase().includes("gemini") || segment.text.toLowerCase().includes("flash")) {
-        console.warn("Detected audio feedback loop of Gemini error. Ignoring.");
-        return;
-    }
 
+    // Normalize to a user message string
+    const userMessage = typeof input === 'string' ? input : input.text;
+
+    // Feedback loop checks
+    const lower = userMessage.toLowerCase();
+    if (lower.includes("i'm sorry, i encountered an error") || lower.includes('i am sorry, i encountered an error')) {
+      console.warn('Detected audio feedback loop. Ignoring.');
+      return;
+    }
+    if (lower.includes('gemini') || lower.includes('flash')) {
+      console.warn('Detected audio feedback loop of Gemini error. Ignoring.');
+      return;
+    }
 
     try {
-      const question = segment.text;
-      
-      let currentTranscript: TranscriptSegment[] = [];
-      setTranscript((prev: TranscriptSegment[]) => {
-        currentTranscript = prev;
-        return prev;
-      });
-
       // Show "thinking" message
       const thinkingMessage: BotResponse = {
         speaker: 'Bot',
@@ -465,19 +496,30 @@ export default function MeetingBotApp() {
       };
       setBotResponses((prev: BotResponse[]) => [...prev, thinkingMessage]);
 
-      // 1. Get text response from Gemini
-      const responseText = await geminiServiceRef.current.generateResponse(
-        question,
-        currentTranscript
-      );
+      // Debug: show what transcript will be sent (use ref to get latest immediately)
+      const currentTranscript = fullTranscriptRef.current || [];
+      console.log('📝 Transcript being sent to bot:', {
+        messageCount: currentTranscript.length,
+        messages: currentTranscript.map(m => `${m.speaker}: ${m.text.substring(0, 30)}...`),
+      });
+
+      let responseText: string;
+
+      // If user asked to summarize, call the summarize endpoint
+      if (userMessage.toLowerCase().includes('summarize')) {
+        responseText = await geminiServiceRef.current.summarizeMeeting(currentTranscript);
+      } else {
+        // Otherwise generate a context-aware response using the full transcript
+        responseText = await geminiServiceRef.current.generateResponse(userMessage, currentTranscript);
+      }
 
       const newResponse: BotResponse = {
         speaker: 'Bot',
         text: responseText,
         timestamp: Date.now(),
       };
-      
-      // Update UI with final text
+
+      // Update UI with final text (replace thinking message)
       setBotResponses((prev: BotResponse[]) => {
         const updated = [...prev];
         const lastResponse = updated[updated.length - 1];
@@ -489,25 +531,20 @@ export default function MeetingBotApp() {
         return updated;
       });
 
-      // --- NEW: Bot speaking logic ---
+      // --- Bot speaking logic (send TTS audio if available) ---
       if (speechServiceRef.current && window.electronAPI) {
         try {
-            console.log("Generating bot audio data from text...");
-            // 2. Get audio data from TTS service
-            const audioData = await speechServiceRef.current.createAudioData(responseText);
-            console.log("Bot audio data created (ArrayBuffer).");
-            
-            // 3. Send audio data to main process to be relayed to meeting window
-            window.electronAPI.sendBotAudio(audioData);
-            console.log("Sent bot audio data to main process.");
-
-        } catch(audioError) {
-             console.error("Failed to generate or send bot audio:", audioError);
+          console.log('Generating bot audio data from text...');
+          const audioData = await speechServiceRef.current.createAudioData(responseText);
+          console.log('Bot audio data created (ArrayBuffer).');
+          window.electronAPI.sendBotAudio(audioData);
+          console.log('Sent bot audio data to main process.');
+        } catch (audioError) {
+          console.error('Failed to generate or send bot audio:', audioError);
         }
       } else {
-        console.warn("Speech service or Electron API not available. Cannot speak.");
+        console.warn('Speech service or Electron API not available. Cannot speak.');
       }
-      // --- END of NEW logic ---
 
     } catch (error) {
       console.error('Error in handleBotResponse:', error);
@@ -515,7 +552,7 @@ export default function MeetingBotApp() {
         const updated = [...prev];
         const lastResponse = updated[updated.length - 1];
         if (lastResponse && lastResponse.text === '...') {
-            lastResponse.text = "Sorry, I had trouble responding.";
+          lastResponse.text = 'Sorry, I had trouble responding.';
         }
         return updated;
       });
