@@ -1,3 +1,5 @@
+// amarnath-ghosh/test-bot/test-bot-8f5b51de8b94d0a0054e52db17bbcbccb9c0849e/lib/speech.ts
+
 import { AudioCaptureSettings } from './types'; // Assuming types.ts is in the same directory
 
 export interface SpeechConfig {
@@ -19,7 +21,9 @@ export class SpeechService {
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private config: Required<SpeechConfig>;
   private availableVoices: SpeechSynthesisVoice[] = [];
-  private deepgramApiKey: string | undefined;
+  
+  // --- REMOVED THIS LINE ---
+  // private deepgramApiKey: string | undefined;
 
   // AudioContext for routing bot audio
   private audioContext: AudioContext | null = null;
@@ -34,7 +38,8 @@ export class SpeechService {
       ...config,
     };
     
-    this.deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
+    // --- REMOVED THIS LINE ---
+    // this.deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
 
     // Lazy load audio context
     if (typeof window !== 'undefined' && !this.audioContext) {
@@ -45,6 +50,7 @@ export class SpeechService {
   }
 
   private initializeVoices(): void {
+    // ... (this function is unchanged)
     // This is for local speech
     const updateVoices = () => {
       this.availableVoices = this.synth.getVoices();
@@ -59,6 +65,7 @@ export class SpeechService {
   }
 
   getAvailableVoices(): VoiceInfo[] {
+    // ... (this function is unchanged)
     return this.availableVoices.map(voice => ({
       name: voice.name,
       lang: voice.lang,
@@ -68,6 +75,7 @@ export class SpeechService {
   }
 
   private determineGender(voiceName: string): 'male' | 'female' | 'unknown' {
+    // ... (this function is unchanged)
     const femaleIndicators = [
       'female', 'woman', 'girl', 'lady', 'samantha', 'susan', 'karen', 'anna', 'emma',
     ];
@@ -96,6 +104,7 @@ export class SpeechService {
     onEnd?: () => void,
     onError?: (error: Error) => void
   ): Promise<void> {
+    // ... (this function is unchanged)
     return new Promise((resolve, reject) => {
       // Cancel any ongoing speech
       this.stop();
@@ -133,68 +142,44 @@ export class SpeechService {
   }
 
   stop(): void {
+    // ... (this function is unchanged)
     this.synth.cancel();
     this.currentUtterance = null;
   }
 
   pause(): void {
+    // ... (this function is unchanged)
     if (this.synth.speaking) {
       this.synth.pause();
     }
   }
 
   resume(): void {
+    // ... (this function is unchanged)
     if (this.synth.paused) {
       this.synth.resume();
     }
   }
 
   isSpeaking(): boolean {
+    // ... (this function is unchanged)
     return this.synth.speaking;
   }
 
   isPaused(): boolean {
+    // ... (this function is unchanged)
     return this.synth.paused;
   }
 
   updateConfig(newConfig: Partial<SpeechConfig>): void {
+    // ... (this function is unchanged)
     this.config = { ...this.config, ...newConfig };
   }
 
-  /**
-   * Creates an ArrayBuffer of the bot's speech by calling a Cloud TTS API.
-   * This audio data is intended to be sent TO THE MEETING.
-   */
+  // --- THIS ENTIRE FUNCTION IS REMOVED ---
+  /*
   async createAudioData(text: string): Promise<ArrayBuffer> {
-    if (!this.deepgramApiKey || this.deepgramApiKey === "YOUR_DEEPGRAM_API_KEY_HERE") {
-      console.error('Deepgram API key is not set. Cannot generate bot speech.');
-      throw new Error('Deepgram API key is not set.');
-    }
-    
-    // Use Deepgram's Speak API
-    const url = `https://api.deepgram.com/v1/speak?model=${this.config.voice}`;
-    
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Token ${this.deepgramApiKey}`,
-        },
-        body: JSON.stringify({ text }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(`Deepgram TTS API error: ${err.reason || response.statusText}`);
-      }
-      
-      // Return the audio data as an ArrayBuffer
-      return await response.arrayBuffer();
-
-    } catch (error) {
-      console.error('Error generating bot audio data:', error);
-      throw error;
-    }
+    // ... (function body removed) ...
   }
+  */
 }

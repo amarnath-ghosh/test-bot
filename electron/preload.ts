@@ -1,3 +1,5 @@
+// amarnath-ghosh/test-bot/test-bot-8f5b51de8b94d0a0054e52db17bbcbccb9c0849e/electron/preload.ts
+
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { ElectronAPI } from '../lib/types';
 
@@ -18,9 +20,9 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.removeAllListeners('transcript-update');
   },
 
-  // --- ADD THIS FUNCTION ---
-  sendBotAudio: (audioData: ArrayBuffer) => {
-    ipcRenderer.send('bot-speak-data', audioData);
+  // --- THIS FUNCTION IS MODIFIED ---
+  sendBotTextToSpeak: (text: string) => {
+    ipcRenderer.send('bot-text-to-speak', text);
   }
 };
 

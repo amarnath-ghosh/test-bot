@@ -531,19 +531,18 @@ export default function MeetingBotApp() {
         return updated;
       });
 
-      // --- Bot speaking logic (send TTS audio if available) ---
-      if (speechServiceRef.current && window.electronAPI) {
+      // --- Bot speaking logic (send text to main process for TTS) ---
+      if (window.electronAPI) {
         try {
-          console.log('Generating bot audio data from text...');
-          const audioData = await speechServiceRef.current.createAudioData(responseText);
-          console.log('Bot audio data created (ArrayBuffer).');
-          window.electronAPI.sendBotAudio(audioData);
-          console.log('Sent bot audio data to main process.');
+          console.log('Sending bot text to main process for TTS...');
+          // Send the TEXT to the main process for audio generation
+          window.electronAPI.sendBotTextToSpeak(responseText);
+          console.log('Sent bot text to main process.');
         } catch (audioError) {
-          console.error('Failed to generate or send bot audio:', audioError);
+          console.error('Failed to send bot text to main process:', audioError);
         }
       } else {
-        console.warn('Speech service or Electron API not available. Cannot speak.');
+        console.warn('Electron API not available. Cannot speak.');
       }
 
     } catch (error) {

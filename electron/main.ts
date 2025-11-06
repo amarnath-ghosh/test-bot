@@ -2,6 +2,19 @@ import { app, BrowserWindow, ipcMain, desktopCapturer, DesktopCapturerSource, Ip
 import * as path from 'path';
 import * as fs from 'fs';
 import { WindowManager } from './types';
+import * as dotenv from 'dotenv';
+import { createClient } from '@deepgram/sdk';
+
+// Load .env file from the project root
+dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
+
+// Initialize Deepgram client in the main process
+const deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
+const deepgram = deepgramApiKey ? createClient(deepgramApiKey) : null;
+
+if (!deepgram) {
+  console.warn('DEEPGRAM_API_KEY not found. TTS in the meeting will be disabled.');
+}
 
 const isDev = process.env.NODE_ENV === 'development';
 const port = process.env.PORT || 3000; 
@@ -20,18 +33,22 @@ class ElectronApp {
 
   private setupSecurityPolicy(): void {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-      callback({
-        responseHeaders: {
-          ...details.responseHeaders,
-          'Content-Security-Policy': [
-            isDev
-              // --- THIS LINE IS MODIFIED ---
-              ? `default-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; script-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ${devUrl} wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' ${devUrl} 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;`
-              // --- THIS LINE IS MODIFIED ---
-              : "default-src 'self'; script-src 'self'; connect-src 'self' wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;"
-          ]
-        }
-      });
+      // Only apply strict CSP to the main UI window
+      if (details.webContentsId === this.windows.mainWindow?.webContents.id) {
+        callback({
+          responseHeaders: {
+            ...details.responseHeaders,
+            'Content-Security-Policy': [
+              isDev
+                ? `default-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; script-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ${devUrl} wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' ${devUrl} 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;`
+                : "default-src 'self'; script-src 'self'; connect-src 'self' wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;"
+            ]
+          }
+        });
+      } else {
+        // For meeting window or other windows, do not modify headers
+        callback({ responseHeaders: details.responseHeaders });
+      }
     });
   }
 
@@ -178,16 +195,83 @@ class ElectronApp {
       }
     });
 
-    // --- NEW: IPC handler to relay audio from UI to meeting window ---
-    ipcMain.on('bot-speak-data', (event, audioData: ArrayBuffer) => {
-      // Check if the message is from the mainWindow
-      if (event.sender === this.windows.mainWindow?.webContents) {
-        // Relay the message to the meetingWindow
+    // --- MODIFIED: Handle text-to-speech requests using Deepgram ---
+    ipcMain.on('bot-text-to-speak', async (event, text: string) => {
+      // 1. Ensure the message is from the main UI window
+      if (event.sender !== this.windows.mainWindow?.webContents) {
+        return;
+      }
+
+      console.log('[Main] Received text to speak:', text.substring(0, 50) + '...');
+      
+      if (!deepgram) {
+        console.error('[Main] Cannot speak. Deepgram client is not initialized.');
+        return;
+      }
+
+      try {
+        // 2. Generate audio here in the main process
+        const audioData = await this.getDeepgramTTS(text);
+        console.log(`[Main] Generated audio data: ${audioData.byteLength} bytes`);
+        
+        // 3. Send the audio data DIRECTLY to the meeting window
         if (this.windows.meetingWindow) {
           this.windows.meetingWindow.webContents.send('bot-speak', audioData);
+          console.log('[Main] Relayed audio data to meeting window.');
+        } else {
+          console.warn('[Main] No meeting window to send audio to.');
         }
+      } catch (error) {
+        console.error('[Main] Error in TTS generation/relay pipeline:', error);
       }
     });
+  }
+
+  private async getDeepgramTTS(text: string): Promise<ArrayBuffer> {
+    if (!deepgram) {
+      console.error('[Main] Deepgram API key not set. Cannot generate TTS.');
+      throw new Error('Deepgram API key not configured for main process.');
+    }
+
+    try {
+      // Use the Deepgram SDK to get speech
+      const response = await deepgram.speak.request(
+        { text },
+        { model: 'aura-asteria-en' }
+      );
+      
+      // Get the stream and convert it to Uint8Array
+      const stream = await response.getStream();
+      if (!stream) {
+        throw new Error('Failed to get audio stream from Deepgram');
+      }
+
+      // Read the stream into a Uint8Array
+      const reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+
+      // Combine all chunks into a single Uint8Array
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const result = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        result.set(chunk, offset);
+        offset += chunk.length;
+      }
+      
+      // Convert to ArrayBuffer
+      return result.buffer;
+
+    } catch (error) {
+      console.error('[Main] Deepgram TTS request failed:', error);
+      throw error;
+    }
   }
 
   private setupEventHandlers(): void {
