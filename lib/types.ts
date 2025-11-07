@@ -1,5 +1,3 @@
-// amarnath-ghosh/test-bot/test-bot-8f5b51de8b94d0a0054e52db17bbcbccb9c0849e/lib/types.ts
-
 // Define a minimal interface to avoid importing the 'electron' package
 export interface DesktopCapturerSource {
   id: string;
@@ -103,9 +101,7 @@ export interface ElectronAPI {
   closeMeeting: () => Promise<{ success: boolean }>;
   onTranscriptUpdate: (callback: (data: TranscriptSegment) => void) => void;
   removeTranscriptListener: () => void;
-  
-  // --- THIS IS THE MODIFIED LINE ---
-  sendBotTextToSpeak: (text: string) => void;
+  sendBotAudio: (audioData: ArrayBuffer) => void;
 }
 
 export interface AppState {
