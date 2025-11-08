@@ -11,6 +11,7 @@ export class AudioManager {
   private originalTrack: MediaStreamTrack | null = null;
   private syntheticTrack: MediaStreamTrack | null = null;
   private currentSender: RTCRtpSender | null = null;
+  private audioSwapLock = false;
   private trackHistory: AudioTrackInfo[] = [];
 
   constructor(pc?: RTCPeerConnection) {
@@ -80,9 +81,11 @@ export class AudioManager {
 
   async saveCurrentAudioSender(): Promise<void> {
     if (!this.peerConnection) {
-      // This is the error you are likely getting.
-      // app/page.tsx never calls setPeerConnection()
       throw new Error('PeerConnection not available. Cannot find audio sender.');
+    }
+
+    if (this.peerConnection.connectionState === 'closed' || this.peerConnection.connectionState === 'failed') {
+      throw new Error(`PeerConnection invalid state: ${this.peerConnection.connectionState}`);
     }
 
     const senders = this.peerConnection.getSenders();
@@ -104,43 +107,99 @@ export class AudioManager {
   }
 
   async replaceWithSynthetic(syntheticTrack: MediaStreamTrack): Promise<void> {
-    if (!this.currentSender) {
-      throw new Error('No audio sender available. Call saveCurrentAudioSender() first.');
+    if (!this.peerConnection) {
+      throw new Error('PeerConnection not available');
     }
 
-    try {
-      await this.currentSender.replaceTrack(syntheticTrack);
-      this.syntheticTrack = syntheticTrack;
-      
-      this.trackHistory.push({
-        track: syntheticTrack,
-        type: 'synthetic',
-        created: Date.now()
-      });
+    // Prevent concurrent swaps
+    if (this.audioSwapLock) {
+      throw new Error('Audio swap already in progress');
+    }
 
-      console.log('Successfully replaced microphone with synthetic audio');
-    } catch (error) {
-      throw new Error(`Failed to replace track: ${error}`);
+    this.audioSwapLock = true;
+    try {
+      // Always get fresh sender reference from the peerConnection
+      const senders = this.peerConnection.getSenders();
+      const audioSender = senders.find(s => s.track?.kind === 'audio');
+
+      if (!audioSender) {
+        throw new Error('No audio sender found');
+      }
+
+      // Validate connection state
+      if (this.peerConnection.connectionState !== 'connected' && this.peerConnection.connectionState !== 'connecting') {
+        throw new Error(`Invalid state: ${this.peerConnection.connectionState}`);
+      }
+
+      // Retry logic
+      const maxRetries = 3;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await audioSender.replaceTrack(syntheticTrack);
+          this.syntheticTrack = syntheticTrack;
+          this.trackHistory.push({
+            track: syntheticTrack,
+            type: 'synthetic',
+            created: Date.now()
+          });
+          console.log('Successfully replaced microphone with synthetic audio');
+          return;
+        } catch (err: any) {
+          console.error(`replaceWithSynthetic attempt ${attempt} failed:`, err?.message || err);
+          if ((err?.message || '').includes('closed') || (err?.message || '').includes('failed')) {
+            // try to let caller refresh or reinitialize peer connection
+            // fallthrough to retry after backoff
+          }
+
+          if (attempt < maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+            await new Promise(res => setTimeout(res, delay));
+          }
+        }
+      }
+
+      throw new Error('Failed to replace track after retries');
+    } finally {
+      this.audioSwapLock = false;
     }
   }
 
   async restoreOriginalTrack(): Promise<void> {
-    if (!this.currentSender || !this.originalTrack) {
-      throw new Error('No original track or sender available');
+    if (!this.peerConnection || !this.originalTrack) {
+      throw new Error('No original track or peer connection available');
     }
 
-    try {
-      await this.currentSender.replaceTrack(this.originalTrack);
-      console.log('Successfully restored original microphone');
+    // Get fresh sender reference
+    const senders = this.peerConnection.getSenders();
+    const audioSender = senders.find(s => s.track?.kind === 'audio');
 
-      // Clean up synthetic track
-      if (this.syntheticTrack) {
-        this.syntheticTrack.stop();
-        this.syntheticTrack = null;
+    if (!audioSender) {
+      throw new Error('No audio sender available');
+    }
+
+    // Attempt the replace with a small retry loop
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await audioSender.replaceTrack(this.originalTrack);
+        console.log('Successfully restored original microphone');
+
+        // Clean up synthetic track
+        if (this.syntheticTrack) {
+          this.syntheticTrack.stop();
+          this.syntheticTrack = null;
+        }
+        return;
+      } catch (error: any) {
+        console.error(`restoreOriginalTrack attempt ${attempt} failed:`, error?.message || error);
+        if (attempt < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+          await new Promise(res => setTimeout(res, delay));
+        }
       }
-    } catch (error) {
-      throw new Error(`Failed to restore original track: ${error}`);
     }
+
+    throw new Error('Failed to restore original track after retries');
   }
 
   getCurrentTrackInfo(): AudioTrackInfo | null {
