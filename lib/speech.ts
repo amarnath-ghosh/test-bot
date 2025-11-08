@@ -1,5 +1,3 @@
-import { AudioCaptureSettings } from './types'; // Assuming types.ts is in the same directory
-
 export interface SpeechConfig {
   rate?: number;
   pitch?: number;
@@ -21,9 +19,6 @@ export class SpeechService {
   private availableVoices: SpeechSynthesisVoice[] = [];
   private deepgramApiKey: string | undefined;
 
-  // AudioContext for routing bot audio
-  private audioContext: AudioContext | null = null;
-
   constructor(config: SpeechConfig = {}) {
     this.synth = window.speechSynthesis;
     this.config = {
@@ -35,11 +30,6 @@ export class SpeechService {
     };
     
     this.deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
-
-    // Lazy load audio context
-    if (typeof window !== 'undefined' && !this.audioContext) {
-      this.audioContext = new AudioContext();
-    }
 
     this.initializeVoices();
   }
@@ -162,7 +152,7 @@ export class SpeechService {
   }
 
   /**
-   * Creates an ArrayBuffer of the bot's speech by calling a Cloud TTS API.
+   * Creates an ArrayBuffer of the bot's speech (RAW PCM DATA).
    * This audio data is intended to be sent TO THE MEETING.
    */
   async createAudioData(text: string): Promise<ArrayBuffer> {
@@ -171,8 +161,16 @@ export class SpeechService {
       throw new Error('Deepgram API key is not set.');
     }
     
-    // Use Deepgram's Speak API
-    const url = `https://api.deepgram.com/v1/speak?model=${this.config.voice}`;
+    const model = this.config.voice || 'aura-asteria-en';
+    
+    const params = new URLSearchParams({
+      model: model,
+      encoding: 'linear16',    // Request 16-bit linear PCM
+      sample_rate: '24000',    // This is the sample rate our content-script context will use
+      // --- NO CONTAINER (WAV) ---
+    });
+    
+    const url = `https://api.deepgram.com/v1/speak?${params.toString()}`;
     
     try {
       const response = await fetch(url, {
@@ -189,7 +187,7 @@ export class SpeechService {
         throw new Error(`Deepgram TTS API error: ${err.reason || response.statusText}`);
       }
       
-      // Return the audio data as an ArrayBuffer
+      // Return the raw audio data as an ArrayBuffer
       return await response.arrayBuffer();
 
     } catch (error) {

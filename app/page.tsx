@@ -534,11 +534,20 @@ export default function MeetingBotApp() {
       // --- Bot speaking logic (send TTS audio if available) ---
       if (speechServiceRef.current && window.electronAPI) {
         try {
-          console.log('Generating bot audio data from text...');
-          const audioData = await speechServiceRef.current.createAudioData(responseText);
-          console.log('Bot audio data created (ArrayBuffer).');
-          window.electronAPI.sendBotAudio(audioData);
-          console.log('Sent bot audio data to main process.');
+          console.log('Generating bot audio data (Raw PCM)...');
+          // 1. Get raw linear16 PCM data from Deepgram
+          const rawPCMBuffer: ArrayBuffer = await speechServiceRef.current.createAudioData(responseText);
+          console.log('Bot audio data created (Raw PCM ArrayBuffer).');
+
+          // 2. Convert 16-bit Int PCM to 32-bit Float PCM (This is safe)
+          console.log('Converting Int16 PCM to Float32 PCM...');
+          const pcmData: Float32Array = convertInt16ToFloat32(rawPCMBuffer);
+          console.log('Bot audio converted to Float32 PCM.');
+
+          // 3. Send the Float32 PCM data to the content script
+          window.electronAPI.sendBotAudio(pcmData);
+          console.log('Sent bot Float32 PCM data to main process.');
+
         } catch (audioError) {
           console.error('Failed to generate or send bot audio:', audioError);
         }
@@ -634,6 +643,20 @@ export default function MeetingBotApp() {
     return new Date(timestamp).toLocaleTimeString();
   };
 
+  /**
+   * Converts raw 16-bit PCM (Int16Array) audio data into 32-bit Float
+   * audio data (Float32Array), which is what the Web Audio API needs.
+   */
+  const convertInt16ToFloat32 = (buffer: ArrayBuffer): Float32Array => {
+    const int16Array = new Int16Array(buffer);
+    const float32Array = new Float32Array(int16Array.length);
+    
+    for (let i = 0; i < int16Array.length; i++) {
+      float32Array[i] = int16Array[i] / 32768; // 32768 = 2^15
+    }
+    return float32Array;
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="container mx-auto px-4 py-8">
@@ -693,7 +716,14 @@ export default function MeetingBotApp() {
                       Stop Analysis
                     </button>
                   )}
-                  
+                  {/* --- DEBUG BUTTON --- */}
+                <button
+                  onClick={() => handleBotResponse("Hello bot")}
+                  className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium"
+                >
+                  Test Bot ("Hello")
+                </button>
+                {/* --- END DEBUG BUTTON --- */}
                   <button
                     onClick={handleLeaveMeeting}
                     className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"

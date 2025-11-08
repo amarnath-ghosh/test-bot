@@ -19,8 +19,8 @@ const electronAPI: ElectronAPI = {
   },
 
   // --- ADD THIS FUNCTION ---
-  sendBotAudio: (audioData: ArrayBuffer) => {
-    ipcRenderer.send('bot-speak-data', audioData);
+  sendBotAudio: (pcmData: Float32Array) => {
+    ipcRenderer.send('bot-speak-data', pcmData);
   }
 };
 

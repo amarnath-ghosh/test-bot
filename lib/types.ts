@@ -101,7 +101,7 @@ export interface ElectronAPI {
   closeMeeting: () => Promise<{ success: boolean }>;
   onTranscriptUpdate: (callback: (data: TranscriptSegment) => void) => void;
   removeTranscriptListener: () => void;
-  sendBotAudio: (audioData: ArrayBuffer) => void;
+  sendBotAudio: (pcmData: Float32Array) => void;
 }
 
 export interface AppState {

@@ -25,10 +25,10 @@ class ElectronApp {
           ...details.responseHeaders,
           'Content-Security-Policy': [
             isDev
-              // --- THIS LINE IS MODIFIED ---
-              ? `default-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; script-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ${devUrl} wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' ${devUrl} 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;`
-              // --- THIS LINE IS MODIFIED ---
-              : "default-src 'self'; script-src 'self'; connect-src 'self' wss://api.deepgram.com accounts.google.com https://generativelanguage.googleapis.com https://api.deepgram.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; media-src 'self' blob:;"
+              // --- MODIFIED TO BE MORE PERMISSIVE ---
+              ? `default-src 'self' ${devUrl} https: wss: 'unsafe-inline' 'unsafe-eval' blob: data:; script-src 'self' ${devUrl} 'unsafe-inline' 'unsafe-eval' blob:; connect-src 'self' ${devUrl} https: wss: blob:; style-src 'self' ${devUrl} 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob: data:;`
+              // --- MODIFIED TO BE MORE PERMISSIVE ---
+              : "default-src 'self' https: wss: 'unsafe-inline' 'unsafe-eval' blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; connect-src 'self' https: wss: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob: data:;"
           ]
         }
       });
@@ -179,12 +179,12 @@ class ElectronApp {
     });
 
     // --- NEW: IPC handler to relay audio from UI to meeting window ---
-    ipcMain.on('bot-speak-data', (event, audioData: ArrayBuffer) => {
+    ipcMain.on('bot-speak-data', (event, pcmData: Float32Array) => {
       // Check if the message is from the mainWindow
       if (event.sender === this.windows.mainWindow?.webContents) {
         // Relay the message to the meetingWindow
         if (this.windows.meetingWindow) {
-          this.windows.meetingWindow.webContents.send('bot-speak', audioData);
+          this.windows.meetingWindow.webContents.send('bot-speak', pcmData);
         }
       }
     });

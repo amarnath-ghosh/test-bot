@@ -4,11 +4,11 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 contextBridge.exposeInMainWorld('meetingAPI', {
   /**
    * Listens for the 'bot-speak' event from the main process and passes
-   * the audio data (ArrayBuffer) to the callback.
+   * the audio data (Float32Array) to the callback.
    */
-  onBotSpeak: (callback: (audioData: ArrayBuffer) => void) => {
-    const subscription = (event: IpcRendererEvent, audioData: ArrayBuffer) => 
-      callback(audioData);
+  onBotSpeak: (callback: (pcmData: Float32Array) => void) => {
+    const subscription = (event: IpcRendererEvent, pcmData: Float32Array) => 
+      callback(pcmData);
     
     ipcRenderer.on('bot-speak', subscription);
     

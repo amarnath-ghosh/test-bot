@@ -18,9 +18,10 @@
       "node"
     ]
   },
-  "include": [
+ "include": [
     "./**/*.ts",
-    "../lib/types.ts"
+    "../lib/types.ts",
+    "../types/global.d.ts"
   ],
   "exclude": [
     "node_modules",
