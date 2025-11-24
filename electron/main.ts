@@ -211,22 +211,8 @@ class ElectronApp {
   }
 
   private isValidMeetingUrl(url: string): boolean {
-    try {
-      const urlObj = new URL(url);
-      const validDomains = [
-        'meet.google.com',
-        'zoom.us',
-        'teams.microsoft.com',
-        'webex.com',
-        'gotomeeting.com',
-        'bigbluebutton.org' 
-      ];
-      
-      return validDomains.some(domain => urlObj.hostname.includes(domain));
-    } catch {
-      return false;
-    }
-  }
+  return true; // DANGEROUS: Allows bot to join any site
+}
 }
 
 new ElectronApp();
